@@ -1,0 +1,15 @@
+{
+  "name": "speedread-marketplace",
+  "description": "Home of the speedread plugin — RSVP speed reading for Claude Code responses",
+  "owner": {
+    "name": "notminhaj",
+    "email": "ehsanuddinsyed@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "speedread",
+      "source": "./",
+      "description": "RSVP speed reader for Claude Code — a companion pane flashes each finished response one word at a time at a controllable WPM, from a green marker you can pause and resume"
+    }
+  ]
+}
