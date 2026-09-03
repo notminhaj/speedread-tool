@@ -17,7 +17,9 @@
 //   Ctrl+P (or p)      play from the green marker; while playing: speed up
 //   Ctrl+O (or o)      pause — the marker lands where you stopped
 //   Ctrl+I / Tab (or i)  slow down
-//   left/right  jump by sentence     r restart     q / Esc  quit
+//   left/right  jump by response      up/down  jump by sentence
+//               (in follow mode both walk the whole session, oldest response on)
+//   r restart this response      q / Esc  quit
 //
 // Config (~/.speedread.json, live-reloaded): { "wpm": 300, "step": 25, "autoplay": false }
 
@@ -78,7 +80,8 @@ if (opts.help) {
   console.log(`speedread — RSVP speed reader for the terminal + Claude Code companion
 
   speedread --follow             companion mode: green marker on each finished
-                                 Claude response; p plays from the marker
+                                 Claude response; p plays from the marker,
+                                 ← walks back through the whole session
   speedread --claude             one-shot: play Claude Code's last response
   speedread <file> [--wpm 300]   read a text file
   <cmd> | speedread              read piped output
@@ -86,7 +89,7 @@ if (opts.help) {
   speedread --demo               built-in demo text
 
 keys: Ctrl+P play/faster · Ctrl+O pause (marker lands there) · Ctrl+I slower
-      left/right sentence · r restart · q quit
+      left/right response · up/down sentence · r restart · q quit
       (plain p/o/i also work — the pane has no text input, so they're free)
 config: ~/.speedread.json  { "wpm": 300, "step": 25, "autoplay": false }
 --session <id>: pin to one Claude session's transcript (prefix of its filename)`);
@@ -155,36 +158,47 @@ function resolveTranscript() {
   return f;
 }
 
-// Extract the text of Claude's latest turn: all assistant text blocks that come
-// after the last real user message (tool results also arrive as "user" entries,
-// so a user entry only counts when it carries actual text).
-function extractLastClaudeResponse(file) {
+// Every one of Claude's turns in a transcript, oldest first: assistant text
+// blocks grouped by the real user messages that separate them (tool results
+// also arrive as "user" entries, so a user entry only ends a turn when it
+// carries actual text). Turns that produced no prose — tool-only work — are
+// dropped, so every entry here is something you can actually read.
+function extractClaudeTurns(file) {
   const lines = fs.readFileSync(file, 'utf8').split('\n');
-  const entries = [];
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    try { entries.push(JSON.parse(line)); } catch { /* trailing line may be mid-write */ }
-  }
-  let lastUser = -1;
-  for (let i = 0; i < entries.length; i++) {
-    const e = entries[i];
-    if (e.type !== 'user' || e.isSidechain || e.isMeta) continue;
+  const turns = [];
+  let parts = [];
+  const endTurn = () => {
+    if (!parts.length) return;
+    const text = stripMarkdown(parts.join('\n\n')).trim();
+    parts = [];
+    if (text) turns.push(text);
+  };
+  for (const raw of lines) {
+    if (!raw.trim()) continue;
+    let e;
+    try { e = JSON.parse(raw); } catch { continue; } // trailing line may be mid-write
+    if (e.isSidechain) continue;                     // subagent chatter isn't this conversation
     const c = e.message && e.message.content;
-    const isReal = typeof c === 'string'
-      || (Array.isArray(c) && c.some(x => x && x.type === 'text'));
-    if (isReal) lastUser = i;
-  }
-  const parts = [];
-  for (let i = lastUser + 1; i < entries.length; i++) {
-    const e = entries[i];
-    if (e.type !== 'assistant' || e.isSidechain) continue;
-    const c = e.message && e.message.content;
-    if (!Array.isArray(c)) continue;
+    if (e.type === 'user') {
+      if (e.isMeta) continue;
+      const isReal = typeof c === 'string'
+        || (Array.isArray(c) && c.some(x => x && x.type === 'text'));
+      if (isReal) endTurn();
+      continue;
+    }
+    if (e.type !== 'assistant' || !Array.isArray(c)) continue;
     for (const item of c) {
       if (item && item.type === 'text' && item.text) parts.push(item.text);
     }
   }
-  return stripMarkdown(parts.join('\n\n')).trim();
+  endTurn();
+  return turns;
+}
+
+// The text of Claude's latest turn.
+function extractLastClaudeResponse(file) {
+  const turns = extractClaudeTurns(file);
+  return turns.length ? turns[turns.length - 1] : '';
 }
 
 function readClipboard() {
@@ -222,6 +236,10 @@ function orpIndex(len) {
   return 4;
 }
 
+// A token that ends a sentence, allowing trailing closers ("done.", 'end."').
+// Shared by sentenceStarts detection and the dash-merge skip rule so they never drift.
+const SENTENCE_END = /[.!?…]["')\]}»”’]*$/;
+
 // Per-word display-time multiplier: longer words and clause/sentence ends linger.
 function multiplierFor(word) {
   let m = 1;
@@ -234,16 +252,76 @@ function multiplierFor(word) {
   return m;
 }
 
+// A whitespace-delimited token that is nothing but dashes ("-", "--", "–", "—").
+const DASH_RUN = /^[-–—]+$/;
+// word/word compound: both sides letters only (Unicode), each >= 2 chars — which
+// structurally guarantees exactly one slash — plus optional TRAILING punctuation.
+// Leaves whole: URLs, paths, dates, digits ("x2/x4"), "I/O", "w/", "(and/or".
+const SLASH_COMPOUND = /^(\p{L}{2,})\/(\p{L}{2,})([.,;:!?…"')\]}»”’]*)$/u;
+
+// Refine the raw whitespace split: standalone dashes attach to the previous
+// word's frame (as " —", so multiplierFor's clause class gives it the pause),
+// and word/word compounds split into two frames ("speed/" then "step").
+// Left-to-right; each decision depends only on the current raw token and the
+// last OUTPUT token — never on lookahead — so when a follow-mode turn grows,
+// the refined stream of the old text stays a positional prefix of the new one.
+function refineTokens(raw) {
+  const out = [];
+  for (const w of raw) {
+    if (DASH_RUN.test(w)) {
+      const prev = out[out.length - 1];
+      // Drop the dash when there is no previous word, when the previous word
+      // ends a sentence (merging would lose the sentence boundary and its
+      // longer dwell), or when a dash is already attached (collapse runs).
+      if (prev !== undefined && !SENTENCE_END.test(prev) && !prev.endsWith('—')) {
+        out[out.length - 1] = prev + ' —';
+      }
+      continue;
+    }
+    const m = SLASH_COMPOUND.exec(w);
+    if (m) { out.push(m[1] + '/', m[2] + m[3]); continue; }
+    out.push(w);
+  }
+  // Text that was ONLY dashes: keep the "non-empty text => at least one frame"
+  // invariant that follow mode's turnStarts indexing relies on.
+  if (!out.length && raw.length) out.push('—');
+  return out;
+}
+
 function tokenize(text) {
-  const words = text.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+  const raw = text.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+  const words = refineTokens(raw);
   const mults = words.map(multiplierFor);
   const cum = [0];
   for (let i = 0; i < mults.length; i++) cum.push(cum[i] + mults[i]);
   const sentenceStarts = [0];
   for (let i = 0; i < words.length - 1; i++) {
-    if (/[.!?…]["')\]}»”’]*$/.test(words[i])) sentenceStarts.push(i + 1);
+    if (SENTENCE_END.test(words[i])) sentenceStarts.push(i + 1);
   }
   return { words, mults, cum, sentenceStarts };
+}
+
+// Tokenize a whole session as ONE document: every turn's words concatenated,
+// with `turnStarts` marking where each response begins. Tokenizing per turn and
+// concatenating (rather than joining the text first) means a turn boundary is
+// always a sentence boundary too, so a sentence step walks cleanly from one
+// response back into the previous one. The last word of a turn gets extra dwell,
+// so responses don't blur together when playback runs across the seam.
+function tokenizeTurns(turnTexts) {
+  const words = [], mults = [], sentenceStarts = [], turnStarts = [];
+  for (const text of turnTexts) {
+    const t = tokenize(text);
+    if (!t.words.length) continue;
+    const off = words.length;
+    if (off) mults[off - 1] += 1;              // linger on the previous turn's last word
+    turnStarts.push(off);
+    for (const s of t.sentenceStarts) sentenceStarts.push(off + s);
+    for (const w of t.words) words.push(w);    // push in a loop: spread blows the stack on long sessions
+    for (const m of t.mults) mults.push(m);
+  }
+  const cum = [0];
+  for (let i = 0; i < mults.length; i++) cum.push(cum[i] + mults[i]);
+  return { words, mults, cum, sentenceStarts, turnStarts };
 }
 
 // ---------------------------------------------------------------- non-interactive fallback
@@ -255,8 +333,16 @@ if (!process.stdout.isTTY) {
     const { text, label } = resolveText();
     const { words, cum } = tokenize(text);
     const secs = (cum[words.length] * 60000 / wpm) / 1000;
+    // In follow mode, also report the backlog the pane would load behind the marker.
+    let backlog = '';
+    if (opts.follow) {
+      try {
+        const all = extractClaudeTurns(resolveTranscript());
+        backlog = ` responses=${all.length} session-words=${tokenizeTurns(all).words.length}`;
+      } catch { }
+    }
     process.stdout.write(text + '\n');
-    process.stdout.write(`\n[speedread] source=${label} words=${words.length} wpm=${wpm} step=${step} autoplay=${autoplay} est=${Math.round(secs)}s\n`);
+    process.stdout.write(`\n[speedread] source=${label} words=${words.length}${backlog} wpm=${wpm} step=${step} autoplay=${autoplay} est=${Math.round(secs)}s\n`);
   } catch (e) {
     console.error('speedread: ' + e.message);
     process.exit(1);
@@ -299,15 +385,35 @@ process.on('uncaughtException', (e) => { cleanup(); console.error('speedread: ' 
 // ---------------------------------------------------------------- player state
 //
 // Modes: waiting (follow: no response yet) -> ready (green marker set, not playing)
-//        -> playing <-> paused (marker lands at pause point) -> done (marker back at start)
+//        -> playing <-> paused (marker lands at pause point) -> done (marker back
+//        at the start of the response just read)
 // `idx` is both the playhead and the marker: when not playing, idx IS the marker.
+//
+// In follow mode `doc` is the WHOLE session — every response Claude has given in
+// this conversation, concatenated — and `turnStarts` says where each one begins.
+// The marker sits at the latest response, so nothing about the default flow
+// changes; ← simply keeps walking back past the top of it into everything older.
 
 let doc = null;
 let idx = 0;
 let mode = 'idle';
 let timer = null;
-let turnText = '';   // follow: full text of the turn currently tracked
-let prevPoll = null; // follow: previous poll result, for stability check
+let turns = [];          // follow: text of every response in the session, oldest first
+let turnStarts = [];     // follow: doc word index where each of those responses begins
+let readCount = 0;       // words covered by the run that just finished (for the done screen)
+
+// Where the response containing word `i` starts, and which response that is (1-based).
+// Both degrade to the single-document case when there are no turns (file/clip/demo).
+function turnStartAt(i) {
+  let start = 0;
+  for (const v of turnStarts) { if (v <= i) start = v; else break; }
+  return start;
+}
+function turnIndexAt(i) {
+  let k = 0;
+  for (const v of turnStarts) { if (v <= i) k++; else break; }
+  return k;
+}
 
 function baseDelay() { return 60000 / wpm; }
 function delayFor(i) { return Math.max(20, doc.mults[i] * baseDelay()); }
@@ -330,7 +436,7 @@ function centered(str, cols) {
   return ' '.repeat(pad) + str;
 }
 
-const HINTS = `${DIM}^P play/faster · ^O pause · ^I slower · ←/→ sentence · r restart · q quit${RESET}`;
+const HINTS = `${DIM}^P play/faster · ^O pause · ^I slower · ←/→ response · ↑↓ sentence · q quit${RESET}`;
 
 function screenBase() {
   const cols = process.stdout.columns || 80;
@@ -365,32 +471,51 @@ function drawWaiting() {
   process.stdout.write(out);
 }
 
+// Where the marker sits, for the footer: which response, and how far into the session.
+function positionExtra() {
+  const total = doc ? doc.words.length : 0;
+  const pos = `${Math.min(idx + 1, total)}/${total}`;
+  return turnStarts.length > 1 ? `response ${turnIndexAt(idx)}/${turnStarts.length}  ·  ${pos}` : pos;
+}
+
+// Once there's a backlog to walk, say so — the arrows are the only way to reach
+// it, and nothing else on screen hints that older responses are still there.
+function historyHint(cols, rows, mid) {
+  if (turnStarts.length < 2 || mid + 3 >= rows - 2) return '';
+  return line(mid + 3, centered(`${DIM}←/→ jump between the ${turnStarts.length} responses in this session · ↑↓ by sentence${RESET}`, cols));
+}
+
 function drawReady(label) {
   const { cols, rows, mid } = screenBase();
   const total = doc.words.length;
   const remaining = (doc.cum[total] - doc.cum[idx]) * baseDelay() / 1000;
+  const k = turnIndexAt(idx);
+  // Back in the backlog, say which response you're on instead of "ready".
+  const where = label || (turnStarts.length > 1 && k < turnStarts.length
+    ? `response ${k} of ${turnStarts.length}` : 'response ready');
   let out = CSI + '2J';
-  out += line(mid - 2, centered(`${GREEN}${BOLD}▶ ${label || 'response ready'}${RESET}`, cols));
+  out += line(mid - 2, centered(`${GREEN}${BOLD}▶ ${where}${RESET}`, cols));
   out += line(mid, centered(markerContext(cols), cols));
   out += line(mid + 2, centered(`${DIM}${total - idx} words from the marker · ~${fmtTime(remaining)} at ${wpm} wpm · press Ctrl+P${RESET}`, cols));
-  out += statusFooter(cols, rows, `${idx + 1}/${total}`);
+  out += historyHint(cols, rows, mid);
+  out += statusFooter(cols, rows, positionExtra());
   process.stdout.write(out);
 }
 
 function drawPaused() {
   const { cols, rows, mid } = screenBase();
-  const total = doc.words.length;
   let out = CSI + '2J';
   out += line(mid - 2, centered(`${BOLD}⏸ paused${RESET} ${DIM}— the marker landed here${RESET}`, cols));
   out += line(mid, centered(markerContext(cols), cols));
-  out += line(mid + 2, centered(`${DIM}Ctrl+P resumes from the ${RESET}${GREEN}▶${RESET}${DIM} · ←/→ move it by sentence${RESET}`, cols));
-  out += statusFooter(cols, rows, `${idx + 1}/${total}`);
+  out += line(mid + 2, centered(`${DIM}Ctrl+P resumes from the ${RESET}${GREEN}▶${RESET}${DIM} · ←/→ move it by response${RESET}`, cols));
+  out += historyHint(cols, rows, mid);
+  out += statusFooter(cols, rows, positionExtra());
   process.stdout.write(out);
 }
 
 function drawDone() {
   const { cols, rows, mid } = screenBase();
-  const total = doc ? doc.words.length : 0;
+  const total = readCount || (doc ? doc.words.length : 0);
   let out = CSI + '2J';
   out += line(mid - 1, centered(`${GREEN}✓${RESET} ${BOLD}finished${RESET} — ${total} words`, cols));
   out += line(mid + 1, centered(`${DIM}${opts.follow ? 'Ctrl+P replay · waiting for the next response' : 'Ctrl+P replay · q quit'}${RESET}`, cols));
@@ -447,7 +572,7 @@ function redraw() {
 
 function startPlay() {
   if (!doc || !doc.words.length) return;
-  if (idx >= doc.words.length) idx = 0;
+  if (idx >= doc.words.length) idx = turnStartAt(doc.words.length - 1); // past the end: newest response
   mode = 'playing';
   process.stdout.write(CSI + '2J');
   tick();
@@ -474,7 +599,9 @@ function pause() {
 
 function finish() {
   clearTimeout(timer);
-  idx = 0; // marker back to the start for replay
+  const end = idx;                          // one past the last word played
+  idx = turnStartAt(Math.max(0, end - 1));  // marker back to the top of what you just read
+  readCount = end - idx;
   mode = 'done';
   drawDone();
 }
@@ -494,10 +621,34 @@ function jumpSentence(dir) {
   else { if (mode === 'done') mode = 'paused'; redraw(); }
 }
 
+// Response-level movement. Sentence steps alone would mean hundreds of presses
+// to cross a long session, so ←/→ hop whole responses; like ↑, ← first snaps to
+// the top of the response you're inside.
+function jumpTurn(dir) {
+  if (!doc || mode === 'waiting' || !turnStarts.length) return;
+  const cur = turnStartAt(idx);
+  if (dir < 0) idx = (idx - cur > 2) ? cur : (turnStarts.filter(v => v < cur).pop() ?? 0);
+  else idx = turnStarts.find(v => v > cur) ?? cur;
+  if (mode === 'playing') tick();
+  else { if (mode === 'done') mode = 'paused'; redraw(); }
+}
+
 // ---------------------------------------------------------------- keys
 
+// Holding an arrow down delivers several escape sequences in one read while we
+// are busy drawing. Split those bursts so every press counts — walking back
+// through a session means a lot of arrow presses. Anything not starting with
+// ESC (a paste, say) is left alone and ignored as one unknown key.
+function splitKeys(s) {
+  if (s[0] !== '\x1b' || s.length <= 3) return [s];
+  return s.match(/\x1b\[[0-9;]*[A-Za-z~]|\x1b.|[\s\S]/g) || [s];
+}
+
 function onKey(data) {
-  const s = data.toString('utf8');
+  for (const k of splitKeys(data.toString('utf8'))) handleKey(k);
+}
+
+function handleKey(s) {
   if (s === '\x03' || s === 'q' || s === 'Q' || s === '\x1b') { cleanup(); process.exit(0); }
   if (s === '\x10' || s === 'p' || s === 'P') {           // Ctrl+P: play from marker / speed up
     if (mode === 'playing') { wpm = Math.min(1500, wpm + step); drawFrame(); }
@@ -510,9 +661,11 @@ function onKey(data) {
     redraw();
     return;
   }
-  if (s === '\x1b[D') { jumpSentence(-1); return; }
-  if (s === '\x1b[C') { jumpSentence(1); return; }
-  if (s === 'r' || s === 'R') { if (doc) { idx = 0; startPlay(); } return; }
+  if (s === '\x1b[D') { jumpTurn(-1); return; }   // ←: previous response
+  if (s === '\x1b[C') { jumpTurn(1); return; }    // →: next response
+  if (s === '\x1b[A') { jumpSentence(-1); return; }
+  if (s === '\x1b[B') { jumpSentence(1); return; }
+  if (s === 'r' || s === 'R') { if (doc) { idx = turnStartAt(idx); startPlay(); } return; } // restart this response
 }
 
 // ---------------------------------------------------------------- config live reload
@@ -534,12 +687,65 @@ function pollConfig() {
 
 // ---------------------------------------------------------------- follow mode
 
-function adoptText(text, label) {
-  turnText = text;
-  doc = tokenize(text);
+// Swap in a new session document. Word indices of earlier responses never move
+// when a response is appended or the newest one grows, so the marker survives.
+function setTurns(next) {
+  turns = next;
+  doc = tokenizeTurns(next);
+  turnStarts = doc.turnStarts;
+  // Transcripts only ever grow, but if one somehow shrank, don't strand the
+  // marker past the end of the document and render nonsense.
+  if (idx >= doc.words.length) idx = turnStartAt(Math.max(0, doc.words.length - 1));
+}
+
+// Adopt a freshly read session. The rule that keeps the backlog usable: the
+// marker only jumps to a new response when it was already sitting in the newest
+// one. If you've walked back to read something older, new arrivals land quietly
+// at the end of the document and wait for you there.
+function ingestTurns(next) {
+  if (!next.length) return;
+  const prevCount = turns.length;
+  const sameLast = prevCount > 0 && next.length === prevCount
+    && next[next.length - 1] === turns[prevCount - 1];
+  if (sameLast) return;                                    // nothing changed on disk that we care about
+
+  const grew = prevCount > 0 && next.length === prevCount
+    && next[next.length - 1].startsWith(turns[prevCount - 1]);
+  const atNewest = prevCount === 0 || idx >= turnStarts[turnStarts.length - 1];
+  const prevTotal = doc ? doc.words.length : 0;
+  const wasDone = mode === 'done';
+
+  setTurns(next);
+  if (!atNewest) { redraw(); return; }  // you're reading the backlog: never yank the marker
+
+  if (grew) {
+    // The same response grew (Claude kept working after a text block): continue
+    // from where the previous block ended instead of replaying it.
+    if (!wasDone) { redraw(); return; } // ready/paused: marker stays, counts update
+    idx = prevTotal;
+    mode = 'ready';
+    if (autoplay) startPlay(); else drawReady('response continued');
+    return;
+  }
+  idx = turnStarts[turnStarts.length - 1]; // a new response: green marker at its start
   mode = 'ready';
-  if (autoplay) startPlay();
-  else drawReady(label);
+  if (autoplay) startPlay(); else drawReady();
+}
+
+let followSig = null;    // path|mtime|size of the transcript as last read
+let pendingTurns = null; // read but not yet adopted, waiting out one quiet poll
+
+// Re-read the transcript only when it actually changed on disk: it's polled
+// twice a second and a long session's file runs to megabytes.
+function readTurnsIfChanged(file) {
+  let st;
+  try { st = fs.statSync(file); } catch { return null; }
+  const sig = `${file}|${st.mtimeMs}|${st.size}`;
+  if (sig === followSig) return null;
+  let next;
+  try { next = extractClaudeTurns(file); } catch { return null; }
+  followSig = sig;
+  return next;
 }
 
 // Which transcript the companion follows. A --session pin never moves. Without
@@ -561,7 +767,7 @@ function chooseFollowFile() {
   const fresh = files.find(f => f.p !== latchedFile && f.b >= followStartMs && f.m > fs.statSync(latchedFile).mtimeMs);
   if (fresh) {
     latchedFile = fresh.p;
-    turnText = ''; prevPoll = null; doc = null; idx = 0;
+    turns = []; turnStarts = []; pendingTurns = null; followSig = null; doc = null; idx = 0;
     if (mode !== 'playing') { mode = 'waiting'; drawWaiting(); }
   }
   return latchedFile;
@@ -570,38 +776,26 @@ function chooseFollowFile() {
 function pollFollow() {
   pollConfig();
   if (mode === 'playing') { setTimeout(pollFollow, 600); return; }
-  let text = '';
-  try { const f = chooseFollowFile(); if (f) text = extractLastClaudeResponse(f); } catch { }
-  // Act only on text that is non-empty, different, and stable across two polls
-  // (so we don't grab a turn mid-stream while Claude is still writing).
-  if (text && text !== turnText && text === prevPoll) {
-    prevPoll = null;
-    if (turnText && text.startsWith(turnText)) {
-      // The same turn grew (Claude kept working after a text block).
-      const oldCount = doc ? doc.words.length : 0;
-      const wasDone = mode === 'done';
-      turnText = text;
-      doc = tokenize(text);
-      if (wasDone) { idx = oldCount; mode = 'ready'; if (autoplay) startPlay(); else drawReady('response continued'); }
-      else redraw(); // ready/paused: marker stays where it was, counts update
-    } else {
-      // A brand-new response: green marker goes to its start.
-      idx = 0;
-      adoptText(text);
-    }
-  } else {
-    prevPoll = text;
+  let file = null;
+  try { file = chooseFollowFile(); } catch { }
+  if (file) {
+    const fresh = readTurnsIfChanged(file);
+    // Adopt only what the transcript then held still for a poll, so a response
+    // is never grabbed mid-stream while Claude is still writing it.
+    if (fresh) pendingTurns = fresh;
+    else if (pendingTurns) { const next = pendingTurns; pendingTurns = null; ingestTurns(next); }
   }
   setTimeout(pollFollow, 600);
 }
 
 // ---------------------------------------------------------------- main
 
-let resolved;
-try { resolved = resolveText(); }
-catch (e) {
-  if (opts.follow) resolved = { text: '', label: 'claude' }; // no transcript yet: start waiting
-  else { console.error('speedread: ' + e.message); process.exit(1); }
+// Follow mode resolves its own text (the whole session, below); everything else
+// is a single fixed document read once here.
+let resolved = null;
+if (!opts.follow) {
+  try { resolved = resolveText(); }
+  catch (e) { console.error('speedread: ' + e.message); process.exit(1); }
 }
 
 process.stdout.write(CSI + '?1049h' + CSI + '?25l' + CSI + '2J');
@@ -612,13 +806,17 @@ if (!inStream) {
 process.stdout.on('resize', redraw);
 
 if (opts.follow) {
+  // Load the session's whole backlog up front, so everything Claude has already
+  // said in this conversation is reachable the moment the pane opens — the
+  // marker just starts at the newest response.
+  let initial = [];
+  try { const f = chooseFollowFile(); if (f) initial = readTurnsIfChanged(f) || []; } catch { }
   idx = 0;
-  if (resolved.text) {
-    // Show the response that already finished as ready-to-read; don't autoplay old news.
-    turnText = resolved.text;
-    doc = tokenize(resolved.text);
+  if (initial.length) {
+    setTurns(initial);
+    idx = turnStarts[turnStarts.length - 1];
     mode = 'ready';
-    drawReady('last response');
+    drawReady('last response'); // ready-to-read, but never autoplay old news
   } else {
     mode = 'waiting';
     drawWaiting();
