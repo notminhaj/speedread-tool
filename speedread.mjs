@@ -21,8 +21,7 @@
 //               (in follow mode both walk the whole session, oldest response on)
 //   r restart this response      q / Esc  quit
 //
-// Config (~/.speedread.json, live-reloaded):
-//   { "wpm": 300, "step": 25, "autoplay": false, "size": 2 }
+// Config (~/.speedread.json, live-reloaded): { "wpm": 300, "step": 25, "autoplay": false }
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -48,12 +47,10 @@ function loadConfigFile() {
   try { return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '')); } catch { return {}; }
 }
 function normalizeConfig(raw) {
-  const c = { wpm: 300, step: 25, autoplay: false, size: 2, ...raw };
+  const c = { wpm: 300, step: 25, autoplay: false, ...raw };
   c.wpm = Number.isFinite(c.wpm) ? Math.min(1500, Math.max(60, c.wpm)) : 300;
   c.step = Number.isFinite(c.step) ? Math.min(200, Math.max(5, c.step)) : 25;
   c.autoplay = !!c.autoplay;
-  // 1 plain terminal text, 2 block letters, 3 double-size block letters
-  c.size = Number.isFinite(c.size) ? Math.min(3, Math.max(1, Math.round(c.size))) : 2;
   return c;
 }
 let lastCfg = normalizeConfig(loadConfigFile());
@@ -63,13 +60,11 @@ try { cfgMtime = fs.statSync(CONFIG_PATH).mtimeMs; } catch { }
 // ---------------------------------------------------------------- args
 
 const argv = process.argv.slice(2);
-const opts = { wpm: null, size: null, file: null, clip: false, claude: false, follow: false, demo: false, help: false, session: null };
+const opts = { wpm: null, file: null, clip: false, claude: false, follow: false, demo: false, help: false, session: null };
 for (let a = 0; a < argv.length; a++) {
   const arg = argv[a];
   if (arg === '--wpm') { opts.wpm = parseInt(argv[++a], 10); }
   else if (arg.startsWith('--wpm=')) { opts.wpm = parseInt(arg.slice(6), 10); }
-  else if (arg === '--size') { opts.size = parseInt(argv[++a], 10); }
-  else if (arg.startsWith('--size=')) { opts.size = parseInt(arg.slice(7), 10); }
   else if (arg === '--session') { opts.session = argv[++a]; }
   else if (arg.startsWith('--session=')) { opts.session = arg.slice(10); }
   else if (arg === '--clip') { opts.clip = true; }
@@ -96,9 +91,7 @@ if (opts.help) {
 keys: Ctrl+P play/faster · Ctrl+O pause (marker lands there) · Ctrl+I slower
       left/right response · up/down sentence · r restart · q quit
       (plain p/o/i also work — the pane has no text input, so they're free)
---size 1|2|3: how big the flashed word is drawn — 1 plain terminal text,
-      2 block letters (default), 3 double-size block letters (wants a wide pane)
-config: ~/.speedread.json  { "wpm": 300, "step": 25, "autoplay": false, "size": 2 }
+config: ~/.speedread.json  { "wpm": 300, "step": 25, "autoplay": false }
 --session <id>: pin to one Claude session's transcript (prefix of its filename)`);
   process.exit(0);
 }
@@ -106,9 +99,7 @@ config: ~/.speedread.json  { "wpm": 300, "step": 25, "autoplay": false, "size": 
 let wpm = lastCfg.wpm;
 let step = lastCfg.step;
 let autoplay = lastCfg.autoplay;
-let size = lastCfg.size;
 if (Number.isFinite(opts.wpm)) wpm = Math.min(1500, Math.max(60, opts.wpm));
-if (Number.isFinite(opts.size)) size = Math.min(3, Math.max(1, opts.size));
 
 // ---------------------------------------------------------------- text sources
 
@@ -432,189 +423,6 @@ function fmtTime(secs) {
   return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 }
 
-// ---------------------------------------------------------------- big text
-//
-// The flashed word is the whole point of RSVP, and one row of terminal text is
-// a small target for it. FONT draws the word in block letters instead: every
-// character is a 5x10 grid of pixels — cap height on rows 0-6, baseline row 6,
-// descenders on rows 7-8 — painted with half-block characters so two pixel rows
-// share one terminal row and the letters keep roughly a typeface's proportions.
-//
-// Each entry is `<top>|<row>|<row>…`: the pixel row the pattern starts on, then
-// its rows with `#` for ink. Capitals and ascenders start at 0 and x-height
-// letters at 2, which is what lines the baselines up across a word.
-
-const GW = 5, GH = 10, GAP = 1;
-
-const FONT = {
-  A: '0|.###.|#...#|#...#|#####|#...#|#...#|#...#',
-  B: '0|####.|#...#|#...#|####.|#...#|#...#|####.',
-  C: '0|.###.|#...#|#....|#....|#....|#...#|.###.',
-  D: '0|####.|#...#|#...#|#...#|#...#|#...#|####.',
-  E: '0|#####|#....|#....|####.|#....|#....|#####',
-  F: '0|#####|#....|#....|####.|#....|#....|#....',
-  G: '0|.###.|#...#|#....|#.###|#...#|#...#|.###.',
-  H: '0|#...#|#...#|#...#|#####|#...#|#...#|#...#',
-  I: '0|#####|..#..|..#..|..#..|..#..|..#..|#####',
-  J: '0|..###|...#.|...#.|...#.|...#.|#..#.|.##..',
-  K: '0|#...#|#..#.|#.#..|##...|#.#..|#..#.|#...#',
-  L: '0|#....|#....|#....|#....|#....|#....|#####',
-  M: '0|#...#|##.##|#.#.#|#.#.#|#...#|#...#|#...#',
-  N: '0|#...#|##..#|#.#.#|#.#.#|#..##|#...#|#...#',
-  O: '0|.###.|#...#|#...#|#...#|#...#|#...#|.###.',
-  P: '0|####.|#...#|#...#|####.|#....|#....|#....',
-  Q: '0|.###.|#...#|#...#|#...#|#.#.#|#..#.|.##.#',
-  R: '0|####.|#...#|#...#|####.|#.#..|#..#.|#...#',
-  S: '0|.####|#....|#....|.###.|....#|....#|####.',
-  T: '0|#####|..#..|..#..|..#..|..#..|..#..|..#..',
-  U: '0|#...#|#...#|#...#|#...#|#...#|#...#|.###.',
-  V: '0|#...#|#...#|#...#|#...#|#...#|.#.#.|..#..',
-  W: '0|#...#|#...#|#...#|#.#.#|#.#.#|##.##|#...#',
-  X: '0|#...#|#...#|.#.#.|..#..|.#.#.|#...#|#...#',
-  Y: '0|#...#|#...#|.#.#.|..#..|..#..|..#..|..#..',
-  Z: '0|#####|....#|...#.|..#..|.#...|#....|#####',
-
-  a: '2|.###.|....#|.####|#...#|.####',
-  b: '0|#....|#....|####.|#...#|#...#|#...#|####.',
-  c: '2|.###.|#...#|#....|#...#|.###.',
-  d: '0|....#|....#|.####|#...#|#...#|#...#|.####',
-  e: '2|.###.|#...#|#####|#....|.###.',
-  f: '0|..##.|.#...|####.|.#...|.#...|.#...|.#...',
-  g: '2|.####|#...#|#...#|#...#|.####|....#|.###.',
-  h: '0|#....|#....|####.|#...#|#...#|#...#|#...#',
-  i: '0|..#..|.....|.##..|..#..|..#..|..#..|.###.',
-  j: '0|...#.|.....|..##.|...#.|...#.|...#.|...#.|#..#.|.##..',
-  k: '0|#....|#....|#..#.|#.#..|##...|#.#..|#..#.',
-  l: '0|.##..|..#..|..#..|..#..|..#..|..#..|.###.',
-  m: '2|##.#.|#.#.#|#.#.#|#.#.#|#.#.#',
-  n: '2|####.|#...#|#...#|#...#|#...#',
-  o: '2|.###.|#...#|#...#|#...#|.###.',
-  p: '2|####.|#...#|#...#|#...#|####.|#....|#....',
-  q: '2|.####|#...#|#...#|#...#|.####|....#|....#',
-  r: '2|#.##.|##..#|#....|#....|#....',
-  s: '2|.####|#....|.###.|....#|####.',
-  t: '0|.....|.#...|####.|.#...|.#...|.#..#|..##.',
-  u: '2|#...#|#...#|#...#|#...#|.####',
-  v: '2|#...#|#...#|#...#|.#.#.|..#..',
-  w: '2|#...#|#.#.#|#.#.#|#.#.#|.#.#.',
-  x: '2|#...#|.#.#.|..#..|.#.#.|#...#',
-  y: '2|#...#|#...#|#...#|#...#|.####|....#|.###.',
-  z: '2|#####|...#.|..#..|.#...|#####',
-
-  0: '0|.###.|#...#|#..##|#.#.#|##..#|#...#|.###.',
-  1: '0|..#..|.##..|..#..|..#..|..#..|..#..|.###.',
-  2: '0|.###.|#...#|....#|...#.|..#..|.#...|#####',
-  3: '0|#####|...#.|..##.|....#|....#|#...#|.###.',
-  4: '0|...#.|..##.|.#.#.|#..#.|#####|...#.|...#.',
-  5: '0|#####|#....|####.|....#|....#|#...#|.###.',
-  6: '0|..##.|.#...|#....|####.|#...#|#...#|.###.',
-  7: '0|#####|....#|...#.|..#..|.#...|.#...|.#...',
-  8: '0|.###.|#...#|#...#|.###.|#...#|#...#|.###.',
-  9: '0|.###.|#...#|#...#|.####|....#|...#.|.##..',
-
-  '.': '2|.....|.....|.....|.##..|.##..',
-  ',': '2|.....|.....|.....|.##..|.##..|..#..|.#...',
-  ':': '2|.##..|.##..|.....|.##..|.##..',
-  ';': '2|.##..|.##..|.....|.##..|.##..|..#..|.#...',
-  '!': '0|..#..|..#..|..#..|..#..|..#..|.....|..#..',
-  '?': '0|.###.|#...#|....#|...#.|..#..|.....|..#..',
-  "'": '0|..#..|..#..',
-  '"': '0|.#.#.|.#.#.',
-  '-': '2|.....|.....|#####|.....|.....',
-  '_': '2|.....|.....|.....|.....|.....|#####',
-  '/': '0|....#|....#|...#.|..#..|.#...|#....|#....',
-  '\\': '0|#....|#....|.#...|..#..|...#.|....#|....#',
-  '(': '0|...#.|..#..|.#...|.#...|.#...|..#..|...#.',
-  ')': '0|.#...|..#..|...#.|...#.|...#.|..#..|.#...',
-  '[': '0|.###.|.#...|.#...|.#...|.#...|.#...|.###.',
-  ']': '0|.###.|...#.|...#.|...#.|...#.|...#.|.###.',
-  '{': '0|..##.|.#...|.#...|##...|.#...|.#...|..##.',
-  '}': '0|.##..|...#.|...#.|..###|...#.|...#.|.##..',
-  '+': '2|..#..|..#..|#####|..#..|..#..',
-  '=': '2|.....|#####|.....|#####|.....',
-  '<': '2|...#.|..#..|.#...|..#..|...#.',
-  '>': '2|.#...|..#..|...#.|..#..|.#...',
-  '*': '0|.....|#.#.#|.###.|#####|.###.|#.#.#',
-  '#': '0|.#.#.|.#.#.|#####|.#.#.|#####|.#.#.|.#.#.',
-  '%': '0|##..#|##.#.|...#.|..#..|.#...|#.##.|#..##',
-  '&': '0|.##..|#..#.|#..#.|.##..|#.#.#|#..#.|.##.#',
-  '@': '0|.###.|#...#|#.###|#.#.#|#.###|#....|.###.',
-  '$': '0|..#..|.####|#.#..|.###.|..#.#|####.|..#..',
-  '|': '0|..#..|..#..|..#..|..#..|..#..|..#..|..#..',
-  '…': '2|.....|.....|.....|.....|#.#.#',
-  ' ': '0|.....',
-};
-
-// Characters that stand in for others: Claude's prose is full of curly quotes
-// and dashes, and there is no reason to drop to plain text over one of them.
-const FONT_ALIAS = {
-  '’': "'", '‘': "'", '“': '"', '”': '"',
-  '—': '-', '–': '-', '−': '-', '·': '.', '•': '.',
-  ' ': ' ',
-};
-
-// A glyph as GH rows of GW characters, blank-padded to its top offset, or null
-// for a character the font has no pattern for.
-const glyphCache = new Map();
-function glyph(ch) {
-  if (glyphCache.has(ch)) return glyphCache.get(ch);
-  const spec = FONT[FONT_ALIAS[ch] || ch];
-  let rows = null;
-  if (spec) {
-    const parts = spec.split('|');
-    const top = parseInt(parts[0], 10);
-    rows = new Array(GH).fill('.'.repeat(GW));
-    for (let i = 1; i < parts.length && top + i - 1 < GH; i++) {
-      rows[top + i - 1] = (parts[i] + '.....').slice(0, GW);
-    }
-  }
-  glyphCache.set(ch, rows);
-  return rows;
-}
-
-// Draw `word` in block letters with its ORP letter red and that letter's centre
-// column sitting exactly on `pivot`, so the eye never moves. Returns the
-// terminal rows to print, or null when it can't be drawn at scale `s` — an
-// unknown character, or a word too wide to fit beside the pivot — which is the
-// caller's cue to try a smaller scale, or plain text.
-function bigWordRows(word, orpChar, pivot, cols, s) {
-  const gs = [];
-  for (const ch of word) {
-    const g = glyph(ch);
-    if (!g) return null;
-    gs.push(g);
-  }
-  if (!gs.length) return null;
-
-  const pxW = gs.length * (GW + GAP) - GAP;
-  const width = pxW * s;
-  // Centre column of the ORP letter, in cells, measured from the word's left edge.
-  const orpCell = (orpChar * (GW + GAP) + Math.floor(GW / 2)) * s + Math.floor(s / 2);
-  const left = pivot - orpCell;
-  if (left < 0 || left + width > cols) return null;
-
-  const out = [];
-  for (let t = 0; t < (GH * s) / 2; t++) {
-    let row = '';
-    let colour = '';
-    for (let c = 0; c < width; c++) {
-      const px = Math.floor(c / s);
-      const ci = Math.floor(px / (GW + GAP));
-      const gx = px % (GW + GAP);
-      const up = gx < GW && gs[ci][Math.floor((2 * t) / s)][gx] === '#';
-      const dn = gx < GW && gs[ci][Math.floor((2 * t + 1) / s)][gx] === '#';
-      const ink = up && dn ? '█' : up ? '▀' : dn ? '▄' : ' ';
-      // The gap column between letters is always blank, so no cell ever has to
-      // carry two colours at once.
-      const want = ink === ' ' ? colour : (ci === orpChar ? RED + BOLD : RESET);
-      if (want !== colour) { row += want; colour = want; }
-      row += ink;
-    }
-    out.push(' '.repeat(left) + row + RESET);
-  }
-  return out;
-}
-
 // ---------------------------------------------------------------- rendering
 
 function line(row, content) {
@@ -715,35 +523,18 @@ function drawDone() {
   process.stdout.write(out);
 }
 
-// Vertical layout of the playing frame: the band of rows it owns, with the
-// guides as its top and bottom row. Every frame clears the whole band before
-// painting it, so a word that steps down a scale — or falls back to plain
-// text — can never leave fragments of a taller one behind. `scale` 0 is plain
-// text, and keeps the original one-row layout inside the same band.
-function frameBand(mid, scale) {
-  const block = scale ? (GH * scale) / 2 : 1;
-  const half = Math.max(3, Math.floor(block / 2) + 1);
-  return { top: mid - half, bot: mid + half, block };
-}
-
-// The largest scale `size` allows that still fits the terminal's height.
-function fitScale(rows, mid) {
-  for (let s = size - 1; s >= 1; s--) {
-    const b = frameBand(mid, s);
-    if (b.top >= 1 && b.bot <= rows - 3) return s;
-  }
-  return 0;
-}
-
 function drawFrame() {
   const { cols, rows, mid } = screenBase();
   const pivot = Math.floor(cols / 2);
-  const word = doc.words[Math.min(idx, doc.words.length - 1)] || '';
-  const orp = Math.min(orpIndex(word.length), Math.max(0, word.length - 1));
 
-  const scale = fitScale(rows, mid);
-  const band = frameBand(mid, scale);
-  const put = (r, s) => (r >= 1 && r <= rows ? line(r, s) : '');
+  let word = doc.words[Math.min(idx, doc.words.length - 1)] || '';
+  // Truncate words too wide to fit right of the pivot (URLs, long paths).
+  const maxw = Math.max(5, pivot - 3);
+  if (word.length > maxw) word = word.slice(0, maxw - 1) + '…';
+  const o = Math.min(orpIndex(word.length), Math.max(0, word.length - 1));
+  const before = word.slice(0, o);
+  const orp = word[o] || '';
+  const after = word.slice(o + 1);
 
   const gw = Math.min(41, Math.max(11, cols - 4));
   const gLeft = pivot - Math.floor(gw / 2);
@@ -753,32 +544,17 @@ function drawFrame() {
     return ' '.repeat(Math.max(0, gLeft)) + DIM + s + RESET;
   };
 
-  // Block letters whenever they fit beside the pivot. A long word steps down a
-  // scale first, and only then falls back to plain text, which truncates it.
-  let block = null;
-  for (let s = scale; s >= 1 && !block; s--) block = bigWordRows(word, orp, pivot, cols, s);
-
-  let out = '';
-  for (let r = band.top; r <= band.bot; r++) out += put(r, '');
-  if (block) {
-    const top = band.top + 1 + Math.floor((band.bot - band.top - 1 - block.length) / 2);
-    block.forEach((s, i) => { out += put(top + i, s); });
-    out += put(band.top, guide('┬'));
-    out += put(band.bot, guide('┴'));
-  } else {
-    // Truncate a word too wide to fit right of the pivot (URLs, long paths).
-    let w = word;
-    const maxw = Math.max(5, pivot - 3);
-    if (w.length > maxw) w = w.slice(0, maxw - 1) + '…';
-    const o = Math.min(orpIndex(w.length), Math.max(0, w.length - 1));
-    out += put(mid, ' '.repeat(Math.max(1, pivot - o)) + w.slice(0, o) + RED + BOLD + (w[o] || '') + RESET + w.slice(o + 1));
-    out += put(mid - 2, guide('┬'));
-    out += put(mid + 2, guide('┴'));
-  }
+  const startCol = Math.max(1, pivot - before.length);
+  const wordLine = ' '.repeat(startCol) + before + RED + BOLD + orp + RESET + after;
 
   const total = doc.words.length;
   const pct = total ? Math.round((idx / total) * 100) : 0;
   const remaining = (doc.cum[total] - doc.cum[Math.min(idx, total)]) * baseDelay() / 1000;
+
+  let out = '';
+  out += line(mid - 2, guide('┬'));
+  out += line(mid, wordLine);
+  out += line(mid + 2, guide('┴'));
   out += line(rows - 2, centered(`${BOLD}${wpm}${RESET}${DIM} wpm  ·  ${Math.min(idx + 1, total)}/${total} (${pct}%)  ·  ~${fmtTime(remaining)} left${RESET}`, cols));
   out += line(rows - 1, centered(HINTS, cols));
   process.stdout.write(out);
@@ -905,8 +681,6 @@ function pollConfig() {
   if (fresh.wpm !== lastCfg.wpm) { wpm = fresh.wpm; }
   if (fresh.step !== lastCfg.step) { step = fresh.step; }
   if (fresh.autoplay !== lastCfg.autoplay) { autoplay = fresh.autoplay; }
-  if (fresh.size !== lastCfg.size) { size = fresh.size; }
-  if (fresh.size !== lastCfg.size) { size = fresh.size; }
   lastCfg = fresh;
   if (mode !== 'playing') redraw(); else drawFrame();
 }

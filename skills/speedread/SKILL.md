@@ -1,5 +1,5 @@
 ---
-description: Open the speedread RSVP companion pane — or, with an argument, configure it: reading speed (WPM), text size, autoplay
+description: Open the speedread RSVP companion pane — or, with an argument, configure it: reading speed (WPM) or autoplay
 disable-model-invocation: true
 allowed-tools: Bash, PowerShell, Read, Write, Edit
 ---
@@ -13,13 +13,12 @@ The speedread CLI lives at the plugin root: `$CLAUDE_PLUGIN_ROOT/speedread.mjs` 
 Its config file is `~/.speedread.json`. The schema is exactly:
 
 ```json
-{ "wpm": 300, "step": 25, "autoplay": false, "size": 2 }
+{ "wpm": 300, "step": 25, "autoplay": false }
 ```
 
 - `wpm`: reading speed, 60–1500 (default 300)
 - `step`: how much each speed-up/slow-down keypress changes wpm, 5–200 (default 25)
 - `autoplay`: when true the companion plays each new response immediately instead of waiting for `p` (default false)
-- `size`: how big the flashed word is drawn — `1` plain terminal text, `2` block letters (default), `3` double-size block letters, which wants a wide pane
 
 Do not invent other fields. The running companion live-reloads this file within ~1 second, so config edits take effect immediately — no restart needed.
 
@@ -28,8 +27,6 @@ Handle `$ARGUMENTS` as follows:
 **A number (e.g. `/speedread 400`)**: set `wpm` in `~/.speedread.json` (create the file if missing, merge with existing fields — never drop fields the user has set). Clamp to 60–1500. Confirm in one line, e.g. "Reading speed set to 400 wpm — the companion picks it up live."
 
 **`step <n>`**: set `step` the same way.
-
-**`size <n>`, or `big` / `bigger` / `huge` / `normal`**: set `size` (1–3) the same way — `normal` is 1, `big`/`bigger` is 2, `huge` is 3. Confirm in one line; the running pane picks it up live.
 
 **`auto on` / `auto off`**: set `autoplay` true/false the same way.
 
@@ -50,7 +47,7 @@ After launching, confirm in one line and remind the keys: Ctrl+P play, Ctrl+O pa
 
 **`off`**: tell the user to press `q` in the companion pane (there is no remote kill by design).
 
-**`status`**: read `~/.speedread.json` (report defaults if missing) and print a short status: current wpm/step/autoplay/size, that bare `/speedread` opens the companion, and the keys, pressed in the companion pane: **Ctrl+P** play from the green marker / speed up while playing, **Ctrl+O** pause (marker lands there), **Ctrl+I** slow down, **←/→** jump back/forward a whole response, **↑/↓** by sentence, `q` quit. Plain `p`/`o`/`i` also work there (the pane has no text input), which matters in terminals that swallow Ctrl combos (VS Code takes Ctrl+P for Quick Open).
+**`status`**: read `~/.speedread.json` (report defaults if missing) and print a short status: current wpm/step/autoplay, that bare `/speedread` opens the companion, and the keys, pressed in the companion pane: **Ctrl+P** play from the green marker / speed up while playing, **Ctrl+O** pause (marker lands there), **Ctrl+I** slow down, **←/→** jump back/forward a whole response, **↑/↓** by sentence, `q` quit. Plain `p`/`o`/`i` also work there (the pane has no text input), which matters in terminals that swallow Ctrl combos (VS Code takes Ctrl+P for Quick Open).
 
 **`demo`**: print the command `node <plugin-root>/speedread.mjs --demo` for the user to run in a regular terminal (it's interactive, so it cannot run through the shell tool).
 
