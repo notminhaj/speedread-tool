@@ -114,7 +114,7 @@ Claude Code writes session transcripts to `~/.claude/projects/<project>/`. The c
 
 Those responses are tokenized individually and concatenated into a single word stream, which is what makes the backlog navigable: a response boundary is always a sentence boundary too, and appending a new response never shifts the indices of the older ones, so your marker survives whatever Claude does next.
 
-Which transcript: `--session <id>` pins the companion to one session's file (`/speedread on` passes this automatically, so it stays glued to the conversation that opened it). Without a pin, it latches onto the newest transcript at startup and only ever switches to a session *created afterwards* — it never jumps between two already-running sessions.
+Which transcript: `--session <id>` pins the companion to one session's file (`/speedread` passes this automatically, so the pane stays glued to the conversation that opened it). Without a pin, it latches onto the newest transcript at startup and only ever switches to a session *created afterwards* — it never jumps between two already-running sessions.
 
 Why a companion pane instead of keys inside Claude Code itself: Claude Code's keybindings can only map keys to its built-in actions — plugins can't add new interactive UI or key handlers, `Ctrl+O` is already its transcript toggle, and `Ctrl+I` is indistinguishable from `Tab` at the byte level. The companion pane gets you the exact interaction model with zero conflicts.
 
