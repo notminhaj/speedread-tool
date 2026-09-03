@@ -1,6 +1,6 @@
 # speedread — RSVP speed reading for Claude Code
 
-Read Claude's responses at 300–1000+ words per minute. A companion pane flashes each finished response **one word at a time** (RSVP — Rapid Serial Visual Presentation), with the optimal-recognition-point letter highlighted in red and pinned to a fixed pivot so your eyes never move. A **green marker `▶`** appears at the start of every finished response; press `Ctrl+P` to speed-read from it, `Ctrl+O` to pause (the marker lands wherever you stopped), `Ctrl+P` again to resume or go faster.
+Read Claude's responses at 300–1000+ words per minute. A companion pane flashes each finished response **one word at a time** (RSVP — Rapid Serial Visual Presentation), drawn in **big block letters** with the optimal-recognition-point letter highlighted in red and pinned to a fixed pivot so your eyes never move. A **green marker `▶`** appears at the start of every finished response; press `Ctrl+P` to speed-read from it, `Ctrl+O` to pause (the marker lands wherever you stopped), `Ctrl+P` again to resume or go faster.
 
 Zero dependencies — needs only [Node.js](https://nodejs.org).
 
@@ -35,6 +35,18 @@ Keys are pressed **in the companion pane** (they only apply when it's focused �
 
 Plain `p`, `o`, and `i` work as aliases — the pane has no text input, so single letters are free there. That's the fallback for terminals that swallow Ctrl combos (VS Code's integrated terminal takes `Ctrl+P` for Quick Open). `Ctrl+I` is byte-identical to `Tab` in every terminal — a terminal fact, not a choice — so `Tab` also slows down.
 
+## Text size
+
+The flashed word is drawn in block letters — a 5x10 pixel grid per character, painted with half-block characters so the letters keep a typeface's proportions — because one row of terminal text is a small target for the eye to sit on. `size` picks how big:
+
+| `size` | What you get |
+|---|---|
+| `1` | plain terminal text (the old look) |
+| `2` | block letters — **the default** |
+| `3` | double-size block letters; wants a wide pane |
+
+Set it with `/speedread size 3`, or `--size 3` on the command line. A word too wide to fit beside the pivot steps down a size and only then falls back to plain text, so a URL or a long path still shows up, just smaller — the same fallback covers a pane too short for block letters, and the rare character the font has no glyph for.
+
 ## Reading back through the session
 
 The companion doesn't hold just the latest response — in `--follow` mode it holds **every response of the session as one document**, newest last, with the marker parked at the start of the newest one. So the default flow is unchanged (open the pane, press `Ctrl+P`, read what Claude just said), but the backlog is always right behind you:
@@ -66,17 +78,18 @@ The plugin adds a command inside Claude Code — plugin commands are namespaced,
 
 | Command | Effect |
 |---|---|
-| `/speedread:speedread` | show current settings and keys |
+| `/speedread:speedread` | **open the companion pane** — splits Windows Terminal, or tells you the command |
+| `/speedread:speedread status` | show current settings and keys |
 | `/speedread:speedread 400` | set reading speed to 400 wpm — **the running companion picks it up live** |
 | `/speedread:speedread step 50` | change how much each speed keypress adjusts |
 | `/speedread:speedread auto on` | autoplay each new response (default off: press `p` yourself) |
-| `/speedread:speedread on` | open the companion pane (splits Windows Terminal, or tells you the command) |
+| `/speedread:speedread size 3` | how big the flashed word is drawn (1 plain text, 2 block letters, 3 double-size) |
 | `/speedread:speedread off` | how to close it (press `q` in the pane) |
 
 Settings live in `~/.speedread.json`:
 
 ```json
-{ "wpm": 300, "step": 25, "autoplay": false }
+{ "wpm": 300, "step": 25, "autoplay": false, "size": 2 }
 ```
 
 The companion re-reads this file every second, so changes apply without restarting.
@@ -90,6 +103,7 @@ node speedread.mjs notes.txt --wpm 450   # a file
 git log | node speedread.mjs             # any piped output
 node speedread.mjs --clip                # the clipboard
 node speedread.mjs --claude              # one-shot: Claude's last response
+node speedread.mjs notes.txt --size 3    # bigger block letters
 ```
 
 On Windows, `speedread.cmd` lets you run `.\speedread` (add the folder to PATH to use it anywhere).
