@@ -46,6 +46,8 @@ While you're reading back there, a new response from Claude **does not move your
 
 ## Install as a Claude Code plugin
 
+You need **Node.js 16 or newer on your PATH** — the plugin runs the companion with `node`, and Claude Code's native installer doesn't include Node. Check with `node --version`.
+
 From GitHub:
 
 ```bash
@@ -64,12 +66,21 @@ The plugin adds a command inside Claude Code — plugin commands are namespaced,
 
 | Command | Effect |
 |---|---|
-| `/speedread:speedread` | **open the companion pane** — splits Windows Terminal, or tells you the command |
+| `/speedread:speedread` | **open the companion pane** (where it opens depends on your terminal — see below) |
 | `/speedread:speedread status` | show current settings and keys |
 | `/speedread:speedread 400` | set reading speed to 400 wpm — **the running companion picks it up live** |
 | `/speedread:speedread step 50` | change how much each speed keypress adjusts |
 | `/speedread:speedread auto on` | autoplay each new response (default off: press `p` yourself) |
 | `/speedread:speedread off` | how to close it (press `q` in the pane) |
+
+Where the companion opens:
+
+| You're running Claude Code in… | `/speedread` does |
+|---|---|
+| Windows Terminal | splits the current window, companion on the side |
+| another Windows console | opens the companion in a new window |
+| tmux (macOS/Linux) | splits the current tmux window |
+| any other terminal | prints the `node … --follow --session <id>` command — run it in a second terminal, in the same folder |
 
 Settings live in `~/.speedread.json`:
 
