@@ -14,9 +14,9 @@
 //   speedread --demo                  built-in demo text
 //
 // Keys:
-//   Ctrl+P (or p)      play from the green marker; while playing: speed up
-//   Ctrl+O (or o)      pause — the marker lands where you stopped
-//   Ctrl+I / Tab (or i)  slow down
+//   p           play from the green marker; while playing: speed up
+//   o           pause — the marker lands where you stopped
+//   i           slow down
 //   left/right  jump by response      up/down  jump by sentence
 //               (in follow mode both walk the whole session, oldest response on)
 //   r restart this response      q / Esc  quit
@@ -88,9 +88,8 @@ if (opts.help) {
   speedread --clip               read the clipboard
   speedread --demo               built-in demo text
 
-keys: Ctrl+P play/faster · Ctrl+O pause (marker lands there) · Ctrl+I slower
+keys: p play/faster · o pause (marker lands there) · i slower
       left/right response · up/down sentence · r restart · q quit
-      (plain p/o/i also work — the pane has no text input, so they're free)
 config: ~/.speedread.json  { "wpm": 300, "step": 25, "autoplay": false }
 --session <id>: pin to one Claude session's transcript (prefix of its filename)`);
   process.exit(0);
@@ -436,7 +435,7 @@ function centered(str, cols) {
   return ' '.repeat(pad) + str;
 }
 
-const HINTS = `${DIM}^P play/faster · ^O pause · ^I slower · ←/→ response · ↑↓ sentence · q quit${RESET}`;
+const HINTS = `${DIM}p play/faster · o pause · i slower ·←/→ response · ↑↓ sentence · q quit${RESET}`;
 
 function screenBase() {
   const cols = process.stdout.columns || 80;
@@ -496,7 +495,7 @@ function drawReady(label) {
   let out = CSI + '2J';
   out += line(mid - 2, centered(`${GREEN}${BOLD}▶ ${where}${RESET}`, cols));
   out += line(mid, centered(markerContext(cols), cols));
-  out += line(mid + 2, centered(`${DIM}${total - idx} words from the marker · ~${fmtTime(remaining)} at ${wpm} wpm · press Ctrl+P${RESET}`, cols));
+  out += line(mid + 2, centered(`${DIM}${total - idx} words from the marker · ~${fmtTime(remaining)} at ${wpm} wpm · press p${RESET}`, cols));
   out += historyHint(cols, rows, mid);
   out += statusFooter(cols, rows, positionExtra());
   process.stdout.write(out);
@@ -507,7 +506,7 @@ function drawPaused() {
   let out = CSI + '2J';
   out += line(mid - 2, centered(`${BOLD}⏸ paused${RESET} ${DIM}— the marker landed here${RESET}`, cols));
   out += line(mid, centered(markerContext(cols), cols));
-  out += line(mid + 2, centered(`${DIM}Ctrl+P resumes from the ${RESET}${GREEN}▶${RESET}${DIM} · ←/→ move it by response${RESET}`, cols));
+  out += line(mid + 2, centered(`${DIM}p resumes from the ${RESET}${GREEN}▶${RESET}${DIM} · ←/→ move it by response${RESET}`, cols));
   out += historyHint(cols, rows, mid);
   out += statusFooter(cols, rows, positionExtra());
   process.stdout.write(out);
@@ -518,7 +517,7 @@ function drawDone() {
   const total = readCount || (doc ? doc.words.length : 0);
   let out = CSI + '2J';
   out += line(mid - 1, centered(`${GREEN}✓${RESET} ${BOLD}finished${RESET} — ${total} words`, cols));
-  out += line(mid + 1, centered(`${DIM}${opts.follow ? 'Ctrl+P replay · waiting for the next response' : 'Ctrl+P replay · q quit'}${RESET}`, cols));
+  out += line(mid + 1, centered(`${DIM}${opts.follow ? 'p replay · waiting for the next response' : 'p replay · q quit'}${RESET}`, cols));
   out += statusFooter(cols, rows);
   process.stdout.write(out);
 }
@@ -650,13 +649,13 @@ function onKey(data) {
 
 function handleKey(s) {
   if (s === '\x03' || s === 'q' || s === 'Q' || s === '\x1b') { cleanup(); process.exit(0); }
-  if (s === '\x10' || s === 'p' || s === 'P') {           // Ctrl+P: play from marker / speed up
+  if (s === 'p' || s === 'P') {                           // play from marker / speed up
     if (mode === 'playing') { wpm = Math.min(1500, wpm + step); drawFrame(); }
     else startPlay();
     return;
   }
-  if (s === '\x0f' || s === 'o' || s === 'O') { pause(); return; }  // Ctrl+O: marker lands here
-  if (s === '\t' || s === 'i' || s === 'I') {             // Ctrl+I (arrives as Tab): slow down
+  if (s === 'o' || s === 'O') { pause(); return; }        // marker lands here
+  if (s === 'i' || s === 'I') {                           // slow down
     wpm = Math.max(60, wpm - step);
     redraw();
     return;

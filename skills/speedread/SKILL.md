@@ -43,11 +43,11 @@ On Windows, launch via the **PowerShell tool, never the Bash tool** — Git Bash
 
 On macOS/Linux: if `$TMUX` is set use `tmux split-window -h -c "<cwd>" node "<plugin-root>/speedread.mjs" --follow --session <id>`; otherwise print the command for the user to run in a second terminal.
 
-After launching, confirm in one line and remind the keys: Ctrl+P play, Ctrl+O pause, Ctrl+I slower, ←/→ jump a response back/forward — pressed **in the companion pane** (keys only apply when that pane is focused; typing in Claude Code is unaffected). Worth saying once: the pane loads the whole session, so responses from earlier in the conversation are reachable with ←, not just the latest one.
+After launching, confirm in one line and remind the keys: p play, o pause, i slower, ←/→ jump a response back/forward — pressed **in the companion pane** (keys only apply when that pane is focused; typing in Claude Code is unaffected). Worth saying once: the pane loads the whole session, so responses from earlier in the conversation are reachable with ←, not just the latest one.
 
 **`off`**: tell the user to press `q` in the companion pane (there is no remote kill by design).
 
-**`status`**: read `~/.speedread.json` (report defaults if missing) and print a short status: current wpm/step/autoplay, that bare `/speedread` opens the companion, and the keys, pressed in the companion pane: **Ctrl+P** play from the green marker / speed up while playing, **Ctrl+O** pause (marker lands there), **Ctrl+I** slow down, **←/→** jump back/forward a whole response, **↑/↓** by sentence, `q` quit. Plain `p`/`o`/`i` also work there (the pane has no text input), which matters in terminals that swallow Ctrl combos (VS Code takes Ctrl+P for Quick Open).
+**`status`**: read `~/.speedread.json` (report defaults if missing) and print a short status: current wpm/step/autoplay, that bare `/speedread` opens the companion, and the keys, pressed in the companion pane: **p** play from the green marker / speed up while playing, **o** pause (marker lands there), **i** slow down, **←/→** jump back/forward a whole response, **↑/↓** by sentence, `q` quit.
 
 **`demo`**: print the command `node <plugin-root>/speedread.mjs --demo` for the user to run in a regular terminal (it's interactive, so it cannot run through the shell tool).
 

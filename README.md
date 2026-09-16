@@ -1,6 +1,6 @@
 # speedread — RSVP speed reading for Claude Code
 
-Read Claude's responses at 300–1000+ words per minute. A companion pane flashes each finished response **one word at a time** (RSVP — Rapid Serial Visual Presentation), with the optimal-recognition-point letter highlighted in red and pinned to a fixed pivot so your eyes never move. A **green marker `▶`** appears at the start of every finished response; press `Ctrl+P` to speed-read from it, `Ctrl+O` to pause (the marker lands wherever you stopped), `Ctrl+P` again to resume or go faster.
+Read Claude's responses at 300–1000+ words per minute. A companion pane flashes each finished response **one word at a time** (RSVP — Rapid Serial Visual Presentation), with the optimal-recognition-point letter highlighted in red and pinned to a fixed pivot so your eyes never move. A **green marker `▶`** appears at the start of every finished response; press `p` to speed-read from it, `o` to pause (the marker lands wherever you stopped), `p` again to resume or go faster.
 
 Zero dependencies — needs only [Node.js](https://nodejs.org).
 
@@ -15,7 +15,7 @@ node speedread.mjs --demo
 node speedread.mjs --follow
 ```
 
-When Claude finishes a response, the companion shows `▶ response ready — press Ctrl+P`. Regular output stays regular; speed reading is opt-in per response, exactly one keypress away.
+When Claude finishes a response, the companion shows `▶ response ready — press p`. Regular output stays regular; speed reading is opt-in per response, exactly one keypress away.
 
 Opening the pane late is fine: it loads the **whole session behind the marker**, so the long response you just scrolled past — and every response before it — is still there to read.
 
@@ -25,41 +25,39 @@ Keys are pressed **in the companion pane** (they only apply when it's focused �
 
 | Key | Action |
 |---|---|
-| `Ctrl+P` | play from the green marker; **while playing: speed up** (+25 wpm) |
-| `Ctrl+O` | pause — the green marker lands where you stopped |
-| `Ctrl+I` | slow down (−25 wpm) |
+| `p` | play from the green marker; **while playing: speed up** (+25 wpm) |
+| `o` | pause — the green marker lands where you stopped |
+| `i` | slow down (−25 wpm) |
 | `←` / `→` | jump the marker back / forward a whole response — mid-response, `←` lands at the top of the one you're in first, then keeps going back into earlier ones |
 | `↑` / `↓` | move the marker by sentence |
 | `r` | restart the current response |
 | `q` / `Esc` | quit |
 
-Plain `p`, `o`, and `i` work as aliases — the pane has no text input, so single letters are free there. That's the fallback for terminals that swallow Ctrl combos (VS Code's integrated terminal takes `Ctrl+P` for Quick Open). `Ctrl+I` is byte-identical to `Tab` in every terminal — a terminal fact, not a choice — so `Tab` also slows down.
-
 ## Reading back through the session
 
-The companion doesn't hold just the latest response — in `--follow` mode it holds **every response of the session as one document**, newest last, with the marker parked at the start of the newest one. So the default flow is unchanged (open the pane, press `Ctrl+P`, read what Claude just said), but the backlog is always right behind you:
+The companion doesn't hold just the latest response — in `--follow` mode it holds **every response of the session as one document**, newest last, with the marker parked at the start of the newest one. So the default flow is unchanged (open the pane, press `p`, read what Claude just said), but the backlog is always right behind you:
 
 - `←` jumps back one whole response, `→` forward — the fast way to reach something from ten minutes ago.
 - `↑` walks back sentence by sentence and simply keeps going past the top of a response into the one before it, for when you want to land mid-response rather than at its start.
-- Playback runs *forward through everything*, so parking the marker four responses back and pressing `Ctrl+P` reads you back up to the present. Responses get an extra beat of dwell at the seam so they don't blur together.
+- Playback runs *forward through everything*, so parking the marker four responses back and pressing `p` reads you back up to the present. Responses get an extra beat of dwell at the seam so they don't blur together.
 - The header tells you where you are (`▶ response 11 of 14`), and the footer counts both the response and the session.
 
 While you're reading back there, a new response from Claude **does not move your marker** — it's appended and waits. The marker only follows new arrivals when it was already sitting in the newest response, which is where it starts.
 
 ## Install as a Claude Code plugin
 
-From a local checkout (for trying it out):
+From GitHub:
 
 ```bash
-claude --plugin-dir path/to/fast-reading-tool
-```
-
-Once published to GitHub:
-
-```bash
-claude plugin marketplace add notminhaj/speedread-cli
+claude plugin marketplace add notminhaj/speedread-tool
 # then inside Claude Code:
 /plugin install speedread@speedread-marketplace
+```
+
+From a local checkout (for hacking on it):
+
+```bash
+claude --plugin-dir path/to/speedread-tool
 ```
 
 The plugin adds a command inside Claude Code — plugin commands are namespaced, so its full name is `/speedread:speedread`, but just type `/speedread` and autocomplete resolves it:
@@ -102,9 +100,9 @@ Those responses are tokenized individually and concatenated into a single word s
 
 Which transcript: `--session <id>` pins the companion to one session's file (`/speedread` passes this automatically, so the pane stays glued to the conversation that opened it). Without a pin, it latches onto the newest transcript at startup and only ever switches to a session *created afterwards* — it never jumps between two already-running sessions.
 
-Why a companion pane instead of keys inside Claude Code itself: Claude Code's keybindings can only map keys to its built-in actions — plugins can't add new interactive UI or key handlers, `Ctrl+O` is already its transcript toggle, and `Ctrl+I` is indistinguishable from `Tab` at the byte level. The companion pane gets you the exact interaction model with zero conflicts.
+Why a companion pane instead of keys inside Claude Code itself: Claude Code's keybindings can only map keys to its built-in actions — plugins can't add new interactive UI or key handlers, and every letter you press there is typing. The companion pane has no text input, so plain `p`, `o`, and `i` are free, with zero conflicts.
 
-## Known limitations (v1)
+## Known limitations
 
 - History covers the one transcript being followed: responses from another session — or from before a resume that started a new transcript file — aren't in it.
 - The whole session is re-read and re-tokenized each time the transcript changes — about 12 ms for a 2.2 MB transcript, and only between responses, never during playback.
