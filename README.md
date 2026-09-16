@@ -2,6 +2,10 @@
 
 Read Claude's responses at 300–1000+ words per minute. A companion pane flashes each finished response **one word at a time** (RSVP — Rapid Serial Visual Presentation), with the optimal-recognition-point letter highlighted in red and pinned to a fixed pivot so your eyes never move. A **green marker `▶`** appears at the start of every finished response; press `p` to speed-read from it, `o` to pause (the marker lands wherever you stopped), `p` again to resume or go faster.
 
+![The speedread companion pane: a response arrives, p plays it word by word, o pauses at the green marker, p resumes and speeds up to 350 wpm](docs/demo.gif)
+
+*Recorded at real speed: a response lands, `p` plays it, `o` pauses, `p` resumes and speeds up.*
+
 Zero dependencies — needs only [Node.js](https://nodejs.org).
 
 ## Quick start
